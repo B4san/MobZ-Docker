@@ -1,0 +1,5 @@
+# MobZ runtime dependencies (pinned).
+# OpenAI-compatible client — all calls are routed through FIREWORKS_BASE_URL.
+openai==1.51.2
+# Pinned: openai 1.51.2 passes the `proxies` kwarg that httpx>=0.28 removed.
+httpx==0.27.2

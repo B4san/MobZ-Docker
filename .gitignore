@@ -1,0 +1,39 @@
+# ---------------------------------------------------------------------------
+# Secrets & environment
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# ---------------------------------------------------------------------------
+# Large local model artifacts — present LOCALLY, never committed.
+# Baked into the Docker image at build time (see Dockerfile.ml), not stored in
+# git. Each exceeds GitHub's 100MB file limit.
+#   mobz_cognitive_analyzer_final/  ModernBERT Cognitive Analyzer (~596MB)
+#   prompt_compressor_model/        Gemma-4-E2B prompt compressor (~6GB)
+# ---------------------------------------------------------------------------
+mobz_cognitive_analyzer_final/
+mobz_cognitive_analyzer/
+prompt_compressor_model/
+
+# Backups
+*.bak
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# ---------------------------------------------------------------------------
+# Local run output & Hugging Face cache
+# ---------------------------------------------------------------------------
+output/
+*.tmp
+.hf/

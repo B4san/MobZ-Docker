@@ -1,0 +1,34 @@
+# Never bundle secrets or local dev artifacts into the image.
+.env
+.env.*
+!.env.example
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local I/O and dev data (harness mounts /input and /output at runtime)
+input/
+output/
+results.json
+
+# VCS / editor / docs
+.git/
+.gitignore
+.idea/
+.vscode/
+*.md
+tests/
+
+# Heavy local ML model + backups (not needed by the lean placeholder analyzer).
+# For the ML image that runs the real ModernBERT model, use Dockerfile.ml.
+mobz_cognitive_analyzer/
+mobz_cognitive_analyzer_final/
+*.bak
+scripts/

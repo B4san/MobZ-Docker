@@ -1,0 +1,22 @@
+# Ignore file for the ML image (Dockerfile.ml). Unlike the lean .dockerignore,
+# this KEEPS mobz_cognitive_analyzer/ so the real model is baked in.
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+input/
+output/
+results.json
+.git/
+.gitignore
+.idea/
+.vscode/
+*.md
+tests/
+*.bak
+scripts/
+data/profiles.json

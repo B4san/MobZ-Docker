@@ -1,0 +1,10 @@
+[
+  { "task_id": "t1", "prompt": "Classify the sentiment as positive, negative, or neutral: This is the best purchase I have made all year." },
+  { "task_id": "t2", "prompt": "What is the capital city of Australia?" },
+  { "task_id": "t3", "prompt": "Summarise the following in one sentence: The company reported that quarterly revenue rose 12% year over year, driven by international expansion and a new subscription tier that outperformed internal forecasts." },
+  { "task_id": "t4", "prompt": "Extract the named entities and return JSON with keys people and organizations: Satya Nadella announced a partnership between Microsoft and OpenAI." },
+  { "task_id": "t5", "prompt": "Prove rigorously that there are infinitely many prime numbers, giving each step of the argument." },
+  { "task_id": "t6", "prompt": "Write an efficient Python implementation of Dijkstra's shortest path algorithm using a binary heap, with comments explaining the complexity." },
+  { "task_id": "t7", "prompt": "A train leaves city A at 60 km/h and another leaves city B at 90 km/h toward each other. The cities are 450 km apart. After how many hours do they meet? Show the calculation." },
+  { "task_id": "t8", "prompt": "Translate to French, output one sentence only: The weather is beautiful today and I want to walk in the park." }
+]

@@ -1,0 +1,30 @@
+[
+  {
+    "model": "accounts/fireworks/models/model-a",
+    "knowledge": 0.93,
+    "math": 0.89,
+    "coding": 0.96,
+    "reasoning": 0.84,
+    "summary": 0.91,
+    "ner": 0.99,
+    "sentiment": 0.98,
+    "avg_tokens": 142,
+    "latency": 620,
+    "cost": 0.00014,
+    "json_reliability": 0.97
+  },
+  {
+    "model": "accounts/fireworks/models/model-b",
+    "knowledge": 0.99,
+    "math": 0.97,
+    "coding": 0.98,
+    "reasoning": 0.96,
+    "summary": 0.95,
+    "ner": 0.99,
+    "sentiment": 0.98,
+    "avg_tokens": 410,
+    "latency": 1450,
+    "cost": 0.0009,
+    "json_reliability": 0.99
+  }
+]

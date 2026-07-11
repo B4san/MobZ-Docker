@@ -1,0 +1,7 @@
+# Extra dependencies to run the REAL local Cognitive Analyzer (ModernBERT
+# multi-head). Only needed for the ML image (Dockerfile.ml); the lean image runs
+# the heuristic placeholder analyzer. Local inference counts as zero tokens.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1
+transformers>=4.48.0
+safetensors>=0.4.5

@@ -1,0 +1,11 @@
+# Local development helper. The real evaluation harness runs the image directly
+# and mounts /input and /output itself; this compose file just mirrors that
+# contract for local runs.
+services:
+  mobz:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - ./input:/input:ro
+      - ./output:/output
