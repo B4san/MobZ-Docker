@@ -11,10 +11,14 @@
 #   5. Validate /output/results.json (valid JSON, one entry per task, in order)
 #      and print a per-task answer summary for the accuracy review.
 #
+# Everything needed is created automatically on run (input tasks, temp input/
+# output dirs, permissions). The ONLY external requirement is a .env (or exported
+# env) with three values: FIREWORKS_API_KEY, FIREWORKS_BASE_URL, ALLOWED_MODELS.
+#
 # Usage:
 #   scripts/judge_run.sh [IMAGE] [TASKS_JSON]
 #     IMAGE       default: b4san/mobz:latest
-#     TASKS_JSON  default: scripts/judge_tasks.json
+#     TASKS_JSON  optional; if omitted, a built-in unseen task set is generated.
 #
 # Credentials/config are read from the environment (or a local .env):
 #   FIREWORKS_API_KEY, FIREWORKS_BASE_URL, ALLOWED_MODELS
@@ -22,7 +26,7 @@
 set -euo pipefail
 
 IMAGE="${1:-b4san/mobz:latest}"
-TASKS_JSON="${2:-$(dirname "$0")/judge_tasks.json}"
+TASKS_JSON="${2:-}"   # optional; if empty, a default task set is generated below
 BUDGET_SECONDS="${MOBZ_MAX_RUNTIME_SECONDS:-600}"
 
 # --- Load .env for local runs (harness injects these itself) ----------------
@@ -37,7 +41,29 @@ fi
 
 WORKDIR="$(mktemp -d -t mobz-judge-XXXXXX)"
 mkdir -p "$WORKDIR/input" "$WORKDIR/output"
-cp "$TASKS_JSON" "$WORKDIR/input/tasks.json"
+
+# Tasks: use the file given as arg 2, or auto-generate a default unseen set.
+if [[ -n "$TASKS_JSON" && -f "$TASKS_JSON" ]]; then
+  cp "$TASKS_JSON" "$WORKDIR/input/tasks.json"
+  TASKS_SRC="$TASKS_JSON"
+else
+  cat > "$WORKDIR/input/tasks.json" <<'TASKS'
+[
+  { "task_id": "j1", "prompt": "Is the sentiment of this tweet positive or negative? 'Absolutely thrilled with the new update, everything runs so much smoother now!'" },
+  { "task_id": "j2", "prompt": "Compute 128 divided by 4, then multiply the result by 7. Give only the final number." },
+  { "task_id": "j3", "prompt": "Write a Python function called count_vowels(s) that returns how many vowels are in the string s." },
+  { "task_id": "j4", "prompt": "Return a JSON object with keys \"language\" and \"year\" for this fact: Python was created by Guido van Rossum and first released in 1991." },
+  { "task_id": "j5", "prompt": "In one sentence, explain why the sky appears blue during the day." },
+  { "task_id": "j6", "prompt": "Who painted the Mona Lisa?" },
+  { "task_id": "j7", "prompt": "A shirt costs $40 and is discounted by 25%. What is the final price? Show the calculation briefly." },
+  { "task_id": "j8", "prompt": "List three prime numbers between 10 and 20." },
+  { "task_id": "j9", "prompt": "Translate into Spanish, one sentence only: I will call you tomorrow after the meeting." },
+  { "task_id": "j10", "prompt": "Extract the person and the city as JSON with keys person and city: Ada Lovelace lived in London." }
+]
+TASKS
+  TASKS_SRC="auto-generated (built-in default set)"
+fi
+
 # The container runs as a non-root user; make the mounted input world-readable
 # and the output world-writable so that user can read tasks and write results.
 chmod 755 "$WORKDIR"
@@ -50,7 +76,7 @@ trap cleanup EXIT
 echo "==================================================================="
 echo " MobZ judge harness"
 echo "   image  : $IMAGE"
-echo "   tasks  : $TASKS_JSON ($NTASKS tasks)"
+echo "   tasks  : $TASKS_SRC ($NTASKS tasks)"
 echo "   models : $ALLOWED_MODELS"
 echo "==================================================================="
 
