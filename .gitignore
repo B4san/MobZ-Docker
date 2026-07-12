@@ -37,3 +37,7 @@ venv/
 output/
 *.tmp
 .hf/
+
+# judge_run.sh artifacts (local test outputs)
+judge_run/
+/results.json

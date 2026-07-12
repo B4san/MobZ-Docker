@@ -1,162 +1,231 @@
 #!/usr/bin/env bash
 # ============================================================================
-# judge_run.sh — Simulate the hackathon harness against a PUBLISHED image.
+# judge_run.sh — Track 1 self-check harness (AMD Hackathon: Token-Efficient
+# Routing Agent).
 #
-# Reproduces exactly what a judge does:
-#   1. Pull the Docker image from the public registry.
+# Reproduces how the judges evaluate a PUBLISHED image, using the Track 1 PUBLIC
+# validation examples (retired scoring cases) as the input tasks:
+#   1. Pull the image from the public registry.
 #   2. Report its COMPRESSED size (the ≤10GB gate).
-#   3. Mount /input (read-only) + /output and inject FIREWORKS_API_KEY,
-#      FIREWORKS_BASE_URL, ALLOWED_MODELS — the harness contract.
-#   4. Run the container (10-minute budget) and capture exit code + timing.
-#   5. Validate /output/results.json (valid JSON, one entry per task, in order)
-#      and print a per-task answer summary for the accuracy review.
+#   3. Run the container exactly like the harness (mount /input ro + /output,
+#      inject FIREWORKS_API_KEY / FIREWORKS_BASE_URL / ALLOWED_MODELS), 10-min budget.
+#   4. Persist /output/results.json to the LOCAL directory (./judge_run/output/
+#      and a copy at ./results.json) so the answers are inspectable.
+#   5. Self-check like the judge FAQ: valid JSON, one result per task, task IDs
+#      preserved exactly, schema, no skipped/empty answers, runtime under limit,
+#      plus a per-task correctness rubric derived from the published Expected
+#      criteria (automated approximation — final judging uses an LLM judge).
 #
-# Everything needed is created automatically on run (input tasks, temp input/
-# output dirs, permissions). The ONLY external requirement is a .env (or exported
-# env) with three values: FIREWORKS_API_KEY, FIREWORKS_BASE_URL, ALLOWED_MODELS.
+# Everything is created automatically. The ONLY external requirement is a .env
+# (or exported env) with three values: FIREWORKS_API_KEY, FIREWORKS_BASE_URL,
+# ALLOWED_MODELS.
 #
-# Usage:
-#   scripts/judge_run.sh [IMAGE] [TASKS_JSON]
-#     IMAGE       default: b4san/mobz:latest
-#     TASKS_JSON  optional; if omitted, a built-in unseen task set is generated.
-#
-# Credentials/config are read from the environment (or a local .env):
-#   FIREWORKS_API_KEY, FIREWORKS_BASE_URL, ALLOWED_MODELS
+# Usage:  scripts/judge_run.sh [IMAGE]
+#           IMAGE  default: b4san/mobz:latest
 # ============================================================================
 set -euo pipefail
 
 IMAGE="${1:-b4san/mobz:latest}"
-TASKS_JSON="${2:-}"   # optional; if empty, a default task set is generated below
 BUDGET_SECONDS="${MOBZ_MAX_RUNTIME_SECONDS:-600}"
+HERE="$(pwd)"
+RUN_DIR="$HERE/judge_run"
+IN_DIR="$RUN_DIR/input"
+OUT_DIR="$RUN_DIR/output"
+LOG="$RUN_DIR/container.log"
+RESULTS="$OUT_DIR/results.json"
+LOCAL_COPY="$HERE/results.json"
 
-# --- Load .env for local runs (harness injects these itself) ----------------
-if [[ -f .env ]]; then
-  set -a; # shellcheck disable=SC1091
-  . ./.env; set +a
-fi
-
+# --- Config from .env (harness injects these itself in real judging) --------
+if [[ -f .env ]]; then set -a; . ./.env; set +a; fi
 : "${FIREWORKS_API_KEY:?set FIREWORKS_API_KEY (env or .env)}"
 : "${FIREWORKS_BASE_URL:?set FIREWORKS_BASE_URL (env or .env)}"
 : "${ALLOWED_MODELS:?set ALLOWED_MODELS (env or .env)}"
 
-WORKDIR="$(mktemp -d -t mobz-judge-XXXXXX)"
-mkdir -p "$WORKDIR/input" "$WORKDIR/output"
+# --- Fresh, PERSISTENT local work dirs (NOT cleaned up) ---------------------
+rm -rf "$RUN_DIR"
+mkdir -p "$IN_DIR" "$OUT_DIR"
 
-# Tasks: use the file given as arg 2, or auto-generate a default unseen set.
-if [[ -n "$TASKS_JSON" && -f "$TASKS_JSON" ]]; then
-  cp "$TASKS_JSON" "$WORKDIR/input/tasks.json"
-  TASKS_SRC="$TASKS_JSON"
-else
-  cat > "$WORKDIR/input/tasks.json" <<'TASKS'
+# --- Track 1 PUBLIC validation tasks (verbatim prompts, exact task IDs) -----
+cat > "$IN_DIR/tasks.json" <<'TASKS'
 [
-  { "task_id": "j1", "prompt": "Is the sentiment of this tweet positive or negative? 'Absolutely thrilled with the new update, everything runs so much smoother now!'" },
-  { "task_id": "j2", "prompt": "Compute 128 divided by 4, then multiply the result by 7. Give only the final number." },
-  { "task_id": "j3", "prompt": "Write a Python function called count_vowels(s) that returns how many vowels are in the string s." },
-  { "task_id": "j4", "prompt": "Return a JSON object with keys \"language\" and \"year\" for this fact: Python was created by Guido van Rossum and first released in 1991." },
-  { "task_id": "j5", "prompt": "In one sentence, explain why the sky appears blue during the day." },
-  { "task_id": "j6", "prompt": "Who painted the Mona Lisa?" },
-  { "task_id": "j7", "prompt": "A shirt costs $40 and is discounted by 25%. What is the final price? Show the calculation briefly." },
-  { "task_id": "j8", "prompt": "List three prime numbers between 10 and 20." },
-  { "task_id": "j9", "prompt": "Translate into Spanish, one sentence only: I will call you tomorrow after the meeting." },
-  { "task_id": "j10", "prompt": "Extract the person and the city as JSON with keys person and city: Ada Lovelace lived in London." }
+  { "task_id": "T01",  "prompt": "Name the three primary colors in the RGB color model and briefly explain why displays use RGB instead of RYB." },
+  { "task_id": "T01b", "prompt": "What is the difference between machine learning and deep learning? Briefly explain how each works." },
+  { "task_id": "T01c", "prompt": "Explain the difference between RAM and ROM in a computer. What is each type used for?" },
+  { "task_id": "T02",  "prompt": "A warehouse starts with 2,400 units. In Q1 it sells 37% of stock. In Q2 it restocks 800 units. In Q3 it sells 640 units. How many units remain at the end of Q3?" },
+  { "task_id": "T02b", "prompt": "A recipe requires 3/4 cup of sugar for 12 cookies. How much sugar is needed for 30 cookies? If sugar costs $2.40 per cup, what is the total cost of sugar for 30 cookies?" },
+  { "task_id": "T03",  "prompt": "Classify the sentiment of this customer review as Positive, Negative, or Neutral and give a one-sentence reason: 'The product arrived two days late and the packaging was damaged, but the item worked perfectly and customer support resolved my complaint within an hour.'" },
+  { "task_id": "T03b", "prompt": "Classify the sentiment of this tweet as Positive, Negative, or Neutral and give a one-sentence reason: 'Just got my order. Box was dented and the manual was missing, but honestly the device itself is flawless and set up in under 5 minutes.'" },
+  { "task_id": "T04",  "prompt": "Summarize the following passage in exactly two sentences:\n\n'Machine learning is increasingly deployed in healthcare for diagnosis, treatment planning, and patient monitoring. These systems analyse medical images, predict patient deterioration, and spot patterns in electronic health records that might be missed by human clinicians. However, concerns remain about model interpretability, data privacy, liability when errors occur, and the potential for algorithmic bias to worsen existing healthcare disparities. Regulatory frameworks are still catching up with the pace of deployment, creating uncertainty for healthcare providers and technology developers alike.'" },
+  { "task_id": "T04b", "prompt": "Summarize the following passage in exactly three bullet points, each no longer than 15 words:\n\n'Remote work has transformed how companies operate globally. Employees gain flexibility and reduced commute times, leading to reported improvements in work-life balance. However, challenges persist around collaboration, company culture, and the blurring of personal and professional boundaries. Organisations are responding by investing in digital collaboration tools and rethinking office space as a hub for social and creative work rather than daily attendance.'" },
+  { "task_id": "T05",  "prompt": "Extract all named entities from the following text and label each as PERSON, ORGANIZATION, LOCATION, or DATE:\n\n'On March 15 2023, Sundar Pichai announced that Google would open a new AI research lab in Zurich, partnering with ETH Zurich to focus on large language model safety.'" }
 ]
 TASKS
-  TASKS_SRC="auto-generated (built-in default set)"
-fi
 
-# The container runs as a non-root user; make the mounted input world-readable
-# and the output world-writable so that user can read tasks and write results.
-chmod 755 "$WORKDIR"
-chmod -R a+rX "$WORKDIR/input"
-chmod 777 "$WORKDIR/output"
-NTASKS="$(python3 -c "import json;print(len(json.load(open('$WORKDIR/input/tasks.json'))))")"
-cleanup() { rm -rf "$WORKDIR"; }
-trap cleanup EXIT
+# Container runs as a non-root user: input readable, output writable.
+chmod 755 "$RUN_DIR"; chmod -R a+rX "$IN_DIR"; chmod 777 "$OUT_DIR"
+NTASKS="$(python3 -c "import json;print(len(json.load(open('$IN_DIR/tasks.json'))))")"
 
 echo "==================================================================="
-echo " MobZ judge harness"
+echo " MobZ — Track 1 judge self-check"
 echo "   image  : $IMAGE"
-echo "   tasks  : $TASKS_SRC ($NTASKS tasks)"
-echo "   models : $ALLOWED_MODELS"
+echo "   tasks  : Track 1 public validation set ($NTASKS tasks)"
+echo "   output : $RESULTS  (+ copy at $LOCAL_COPY)"
 echo "==================================================================="
 
 # --- 1. Pull ----------------------------------------------------------------
-echo "[1/4] Pulling image ..."
+echo "[1/5] Pulling image ..."
 docker pull "$IMAGE"
 
 # --- 2. Compressed size gate (≤10GB) ----------------------------------------
-echo "[2/4] Checking compressed image size (10GB limit) ..."
-COMPRESSED_BYTES="$(docker manifest inspect "$IMAGE" 2>/dev/null \
+echo "[2/5] Checking compressed image size (10GB limit) ..."
+CB="$(docker manifest inspect "$IMAGE" 2>/dev/null \
   | python3 -c "import json,sys; m=json.load(sys.stdin); print(sum(l['size'] for l in m.get('layers',[])))" 2>/dev/null || echo 0)"
-if [[ "$COMPRESSED_BYTES" -gt 0 ]]; then
-  python3 - "$COMPRESSED_BYTES" <<'PY'
-import sys
-gb = int(sys.argv[1]) / 1e9
-verdict = "PASS ✅" if gb <= 10 else "FAIL ❌ (> 10GB)"
-print(f"      compressed size: {gb:.2f} GB  -> {verdict}")
+[[ "$CB" -gt 0 ]] && python3 - "$CB" <<'PY'
+import sys; gb=int(sys.argv[1])/1e9
+print(f"      compressed size: {gb:.2f} GB  -> {'PASS ✅' if gb<=10 else 'FAIL ❌ (>10GB)'}")
 PY
-else
-  echo "      (could not read manifest; skipping size check)"
-fi
 
 # --- 3. Run like the harness ------------------------------------------------
-echo "[3/4] Running container (budget ${BUDGET_SECONDS}s) ..."
+echo "[3/5] Running container (budget ${BUDGET_SECONDS}s) ..."
 START="$(date +%s)"
 set +e
 timeout "$BUDGET_SECONDS" docker run --rm \
   -e FIREWORKS_API_KEY="$FIREWORKS_API_KEY" \
   -e FIREWORKS_BASE_URL="$FIREWORKS_BASE_URL" \
   -e ALLOWED_MODELS="$ALLOWED_MODELS" \
-  -v "$WORKDIR/input:/input:ro" \
-  -v "$WORKDIR/output:/output" \
-  "$IMAGE"
+  -v "$IN_DIR:/input:ro" \
+  -v "$OUT_DIR:/output" \
+  "$IMAGE" >"$LOG" 2>&1
 EXIT_CODE=$?
 set -e
 ELAPSED=$(( $(date +%s) - START ))
-# Decode common non-zero exits for a clearer diagnosis.
-EXIT_NOTE=""
-if [[ "$EXIT_CODE" -eq 124 ]]; then
-  EXIT_NOTE=" (TIMEOUT: exceeded ${BUDGET_SECONDS}s budget)"
+
+# Decode common non-zero exits.
+NOTE=""
+if [[ "$EXIT_CODE" -eq 124 ]]; then NOTE=" (TIMEOUT > ${BUDGET_SECONDS}s)"
 elif [[ "$EXIT_CODE" -gt 128 ]]; then
   SIG=$(( EXIT_CODE - 128 ))
   case "$SIG" in
-    4)  EXIT_NOTE=" (SIGILL: a native lib used an unsupported CPU instruction — likely gptqmodel/torchao kernels loading the GPTQ compressor on CPU; the process is killed hard so the heuristic fallback cannot catch it)";;
-    9)  EXIT_NOTE=" (SIGKILL: killed — usually OOM)";;
-    11) EXIT_NOTE=" (SIGSEGV: native segfault)";;
-    6)  EXIT_NOTE=" (SIGABRT: native abort)";;
-    *)  EXIT_NOTE=" (killed by signal $SIG)";;
+    4) NOTE=" (SIGILL: native lib used an unsupported CPU instruction — e.g. gptqmodel/torchao loading the GPTQ compressor on CPU; kills the process so the fallback can't catch it)";;
+    9) NOTE=" (SIGKILL: usually OOM)";; 11) NOTE=" (SIGSEGV)";; 6) NOTE=" (SIGABRT)";;
+    *) NOTE=" (killed by signal $SIG)";;
   esac
 fi
-echo "      exit code: $EXIT_CODE${EXIT_NOTE} | elapsed: ${ELAPSED}s"
+echo "      exit code: $EXIT_CODE${NOTE} | elapsed: ${ELAPSED}s (limit ${BUDGET_SECONDS}s)"
+echo "      --- last container log lines ---"
+tail -n 6 "$LOG" | sed 's/^/      | /'
 
-# --- 4. Validate & summarise outputs ----------------------------------------
-echo "[4/4] Validating /output/results.json ..."
-RESULTS="$WORKDIR/output/results.json" TASKS="$WORKDIR/input/tasks.json" \
-EXIT_CODE="$EXIT_CODE" python3 <<'PY'
-import json, os, sys
+# Surface routing + token metrics (Track 1: efficiency after correctness).
+echo "      --- routing & tokens ---"
+grep -oE "Task [A-Za-z0-9]+ routed to [^ ]+" "$LOG" | sed 's/^/      | /' || true
+grep -oE "in=[0-9]+ out=[0-9]+ total=[0-9]+" "$LOG" | tail -1 | sed 's/^/      | tokens (billed by proxy): /' || true
+
+# Persist a copy in the current directory.
+[[ -f "$RESULTS" ]] && cp "$RESULTS" "$LOCAL_COPY"
+
+# --- 4/5. Self-check + accuracy rubric --------------------------------------
+echo "[4/5] Structural self-check (judge FAQ) ..."
+RESULTS="$RESULTS" TASKS="$IN_DIR/tasks.json" EXIT_CODE="$EXIT_CODE" \
+ELAPSED="$ELAPSED" BUDGET="$BUDGET_SECONDS" python3 <<'PY'
+import json, os, re, sys
+
 results_path, tasks_path = os.environ["RESULTS"], os.environ["TASKS"]
-exit_code = int(os.environ["EXIT_CODE"])
-ok = True
+exit_code = int(os.environ["EXIT_CODE"]); elapsed=int(os.environ["ELAPSED"]); budget=int(os.environ["BUDGET"])
+tasks = json.load(open(tasks_path))
+tids = [t["task_id"] for t in tasks]
+
+def fail(msg): print(f"      ❌ {msg}")
+def ok(msg):   print(f"      ✅ {msg}")
+
+structural_ok = True
 if exit_code != 0:
-    print(f"      FAIL: container exited non-zero ({exit_code})"); ok = False
+    fail(f"RUNTIME: container exited non-zero ({exit_code})"); structural_ok = False
+else:
+    ok("container exited 0 (clean run)")
+if elapsed <= budget: ok(f"runtime under limit ({elapsed}s ≤ {budget}s)")
+else: fail(f"TIMEOUT ({elapsed}s > {budget}s)"); structural_ok = False
+
 try:
-    tasks = json.load(open(tasks_path))
     res = json.load(open(results_path))
 except Exception as e:
-    print(f"      FAIL: results.json missing or invalid JSON: {e}"); sys.exit(1)
-if not isinstance(res, list):
-    print("      FAIL: results is not a JSON array"); ok = False
-tids_in = [t["task_id"] for t in tasks]
-tids_out = [r.get("task_id") for r in res]
-print(f"      valid JSON      : yes ({len(res)} entries)")
-print(f"      one per task    : {'yes' if len(res)==len(tasks) else 'NO'}")
-print(f"      order preserved : {'yes' if tids_out==tids_in else 'NO'}")
-print(f"      schema (id+ans) : {'yes' if all('task_id' in r and 'answer' in r and isinstance(r.get('answer'),str) for r in res) else 'NO'}")
-if len(res)!=len(tasks) or tids_out!=tids_in: ok = False
-print("\n      --- answers (for accuracy review) ---")
-for r in res:
-    ans = (r.get("answer") or "").replace(chr(10), " ")
-    print(f"      [{r.get('task_id')}] {ans[:90]}")
-print("\n      VERDICT:", "PASS ✅" if ok else "FAIL ❌")
-sys.exit(0 if ok else 1)
+    fail(f"OUTPUT_MISSING / INVALID_RESULTS_SCHEMA: {e}")
+    print("\n      VERDICT: FAIL ❌ (no valid output)"); sys.exit(1)
+
+ok("results.json is valid JSON")
+if not isinstance(res, list): fail("results is not a JSON array"); structural_ok=False
+out_ids = [r.get("task_id") for r in res]
+if len(res)==len(tasks): ok(f"one result per task ({len(res)}/{len(tasks)})")
+else: fail(f"MISSING_TASKS: got {len(res)} of {len(tasks)}"); structural_ok=False
+if out_ids==tids: ok("task IDs preserved exactly and in order")
+else: fail(f"task IDs mismatch: {out_ids} vs {tids}"); structural_ok=False
+schema_ok = all(isinstance(r,dict) and isinstance(r.get("task_id"),str) and isinstance(r.get("answer"),str) for r in res)
+ok("schema: each item has string task_id + answer") if schema_ok else fail("INVALID_RESULTS_SCHEMA: task_id/answer types")
+if not schema_ok: structural_ok=False
+ans = {r.get("task_id"): (r.get("answer") or "") for r in res if isinstance(r,dict)}
+empties = [t for t in tids if not ans.get(t,"").strip() or ans.get(t,"").strip().upper() in ("N/A","NA","NONE")]
+if empties: fail(f"empty/placeholder answers (accuracy gate risk): {empties}")
+else: ok("no empty/placeholder answers")
+
+# ---------- Accuracy rubric (approx of the published Expected criteria) ----------
+def sentences(t):
+    return [s for s in re.split(r"(?<=[.!?])\s+", t.strip()) if s.strip()]
+def bullets(t):
+    return [l for l in t.splitlines() if re.match(r"\s*([-*•]|\d+[.)])\s+", l)]
+def has(t, *ws):
+    tl=_norm(t); return all(w in tl for w in ws)
+def any_(t, *ws):
+    tl=_norm(t); return any(w in tl for w in ws)
+def _norm(t):
+    # normalise unicode hyphens (‑ – —) to '-' so matches are robust
+    return t.lower().replace("\u2011","-").replace("\u2013","-").replace("\u2014","-")
+
+def r_T01(a):  return has(a,"red","green","blue") and any_(a,"additive","emit","light")
+def r_T01b(a): return any_(a,"subset","sub-field","subfield","sub field","branch","type of") and "neural" in _norm(a) and any_(a,"feature","representation")
+def r_T01c(a): return "volatile" in a.lower() and any_(a,"firmware","bios") and "ram" in a.lower() and "rom" in a.lower()
+def r_T02(a):  return ("1672" in a) or ("1,672" in a)
+def r_T02b(a): return any_(a,"1.875","1.87","1.88") and any_(a,"4.50","4.5 ","$4.50","4,50")
+def _mixedlabel(a):
+    tl=a.lower()
+    # must not be classified purely Negative
+    label_pos = any_(a,"positive","neutral","mixed")
+    only_neg = ("negative" in tl) and not label_pos
+    return label_pos and not only_neg
+def r_T03(a):  return _mixedlabel(a) and any_(a,"late","damag") and any_(a,"work","support","resolv","hour")
+def r_T03b(a): return _mixedlabel(a) and any_(a,"dent","missing","manual") and any_(a,"flawless","set up","setup","minute")
+def r_T04(a):
+    s=sentences(a); opp=any_(a,"image","predict","pattern","diagnos","monitor","clinical")
+    ch=any_(a,"interpretab","privacy","bias","liabilit","regulat")
+    return len(s)==2 and opp and ch
+def r_T04b(a):
+    b=bullets(a)
+    if len(b)!=3: return False
+    if any(len(re.sub(r"^\s*([-*•]|\d+[.)])\s+","",l).split())>15 for l in b): return False
+    return any_(a,"flexib","work-life","balance") and any_(a,"collaborat","culture","boundar") and any_(a,"tool","office","digital")
+def r_T05(a):
+    tl=a.lower()
+    ents = all(e in tl for e in ["sundar pichai","google","zurich","eth zurich"]) and bool(re.search(r"march\s*15,?\s*2023", tl))
+    labels = all(l in a.upper() for l in ["PERSON","ORGANIZATION","LOCATION","DATE"])
+    return ents and labels
+
+RUBRIC={"T01":r_T01,"T01b":r_T01b,"T01c":r_T01c,"T02":r_T02,"T02b":r_T02b,
+        "T03":r_T03,"T03b":r_T03b,"T04":r_T04,"T04b":r_T04b,"T05":r_T05}
+
+print("\n[5/5] Accuracy rubric (automated approximation of Expected criteria):")
+passed=0
+for t in tids:
+    a=ans.get(t,"")
+    try: good=RUBRIC[t](a)
+    except Exception: good=False
+    passed+=good
+    print(f"      [{t:4}] {'PASS' if good else 'CHECK'}  {a.strip()[:110].replace(chr(10),' ')}")
+print(f"\n      rubric: {passed}/{len(tids)} likely-correct (final = LLM judge)")
+verdict = "PASS ✅" if (structural_ok and not empties) else "FAIL ❌"
+print(f"      structure/reliability: {verdict}")
+sys.exit(0)
 PY
+
+echo
+echo "Output persisted at:"
+echo "  $RESULTS"
+echo "  $LOCAL_COPY   (copy in current directory)"
+echo "Full container log: $LOG"
