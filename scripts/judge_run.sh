@@ -113,7 +113,21 @@ timeout "$BUDGET_SECONDS" docker run --rm \
 EXIT_CODE=$?
 set -e
 ELAPSED=$(( $(date +%s) - START ))
-echo "      exit code: $EXIT_CODE | elapsed: ${ELAPSED}s"
+# Decode common non-zero exits for a clearer diagnosis.
+EXIT_NOTE=""
+if [[ "$EXIT_CODE" -eq 124 ]]; then
+  EXIT_NOTE=" (TIMEOUT: exceeded ${BUDGET_SECONDS}s budget)"
+elif [[ "$EXIT_CODE" -gt 128 ]]; then
+  SIG=$(( EXIT_CODE - 128 ))
+  case "$SIG" in
+    4)  EXIT_NOTE=" (SIGILL: a native lib used an unsupported CPU instruction — likely gptqmodel/torchao kernels loading the GPTQ compressor on CPU; the process is killed hard so the heuristic fallback cannot catch it)";;
+    9)  EXIT_NOTE=" (SIGKILL: killed — usually OOM)";;
+    11) EXIT_NOTE=" (SIGSEGV: native segfault)";;
+    6)  EXIT_NOTE=" (SIGABRT: native abort)";;
+    *)  EXIT_NOTE=" (killed by signal $SIG)";;
+  esac
+fi
+echo "      exit code: $EXIT_CODE${EXIT_NOTE} | elapsed: ${ELAPSED}s"
 
 # --- 4. Validate & summarise outputs ----------------------------------------
 echo "[4/4] Validating /output/results.json ..."
